@@ -5,12 +5,21 @@ import UIKit
 struct FullImageView: View {
     let url: URL
     @State private var uiImage: UIImage?
+    @Environment(\.dismiss) private var dismiss
+    @State private var controlsVisible = true
 
     var body: some View {
-        Group {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
             if let image = uiImage {
                 ZoomableImage(uiImage: image)
-                    .background(Color.black)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            controlsVisible.toggle()
+                        }
+                    }
             } else {
                 VStack(spacing: 12) {
                     ProgressView()
@@ -18,30 +27,48 @@ struct FullImageView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+
+            if controlsVisible {
+                HStack {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 17, weight: .semibold))
+                            .padding(10)
+                            .background(.ultraThinMaterial, in: Circle())
+                    }
+                    .accessibilityLabel("Close")
+
+                    Spacer()
+
+                    if uiImage != nil {
+                        ShareLink(item: url) {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.system(size: 17, weight: .semibold))
+                                .padding(10)
+                                .background(.ultraThinMaterial, in: Circle())
+                        }
+                        .accessibilityLabel("Share")
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .ignoresSafeArea(edges: .top)
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black.ignoresSafeArea())
         .task {
             if uiImage == nil {
                 uiImage = UIImage(contentsOfFile: url.path)
             }
         }
-        .navigationTitle("Full Size")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                if uiImage != nil {
-                    ShareLink(item: url) {
-                        Image(systemName: "square.and.arrow.up")
-                    }
-                    .accessibilityLabel("Share")
-                }
-            }
-        }
+        .statusBarHidden(!controlsVisible)
+        .preferredColorScheme(.dark)
     }
 }
 
-// UIScrollView-backed zoomable image that sets the correct initial zoom
+// UIScrollView-backed zoomable image with proper initial zoom-to-fit and centering.
 private struct ZoomableImage: UIViewRepresentable {
     let uiImage: UIImage
 
@@ -54,22 +81,15 @@ private struct ZoomableImage: UIViewRepresentable {
         scrollView.showsHorizontalScrollIndicator = false
         scrollView.showsVerticalScrollIndicator = false
         scrollView.bouncesZoom = true
+        scrollView.contentInsetAdjustmentBehavior = .never
 
+        // Use a plain frame-based image view for predictable zoom behavior.
         let imageView = UIImageView(image: uiImage)
-        imageView.contentMode = .scaleAspectFit
-        imageView.translatesAutoresizingMaskIntoConstraints = false
+        imageView.contentMode = .scaleToFill
+        imageView.frame = CGRect(origin: .zero, size: uiImage.size)
         scrollView.addSubview(imageView)
 
-        // Pin imageView to the content layout guide so UIScrollView manages content size.
-        NSLayoutConstraint.activate([
-            imageView.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
-            imageView.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
-            imageView.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
-            imageView.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
-            // Keep the image centered when it’s smaller than the scroll view.
-            imageView.centerXAnchor.constraint(equalTo: scrollView.centerXAnchor),
-            imageView.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor)
-        ])
+        scrollView.contentSize = uiImage.size
 
         context.coordinator.imageView = imageView
         context.coordinator.scrollView = scrollView
@@ -107,53 +127,62 @@ private struct ZoomableImage: UIViewRepresentable {
             guard let scrollView, let imageView else { return }
 
             // Wait for valid bounds.
-            let bounds = scrollView.bounds.size
-            guard bounds.width > 0, bounds.height > 0 else {
+            scrollView.layoutIfNeeded()
+            let inset = scrollView.adjustedContentInset
+            let available = CGSize(
+                width: max(0, scrollView.bounds.width - inset.left - inset.right),
+                height: max(0, scrollView.bounds.height - inset.top - inset.bottom)
+            )
+            guard available.width > 0, available.height > 0 else {
                 DispatchQueue.main.async { [weak self] in self?.updateZoomScalesIfNeeded() }
                 return
             }
 
-            // Compute min zoom to fit the image.
-            let xScale = bounds.width / imageSize.width
-            let yScale = bounds.height / imageSize.height
+            // Compute min zoom to fit the image within the visible area.
+            let xScale = available.width / imageSize.width
+            let yScale = available.height / imageSize.height
             let minScale = max(min(xScale, yScale), 0.01)
-            let maxScale = max(4.0, minScale * 6.0)
+
+            // Allow generous zoom-in.
+            let maxScale = max(8.0, minScale * 10.0)
 
             if scrollView.minimumZoomScale != minScale || scrollView.maximumZoomScale != maxScale {
                 scrollView.minimumZoomScale = minScale
                 scrollView.maximumZoomScale = maxScale
             }
 
+            // Ensure base geometry is correct for zooming.
+            imageView.frame = CGRect(origin: .zero, size: imageSize)
+            scrollView.contentSize = imageSize
+
             if !didSetInitialZoom {
                 didSetInitialZoom = true
-                scrollView.zoomScale = minScale
+                scrollView.zoomScale = minScale   // Fit-to-screen on first display.
                 centerImage()
             } else {
                 centerImage()
             }
-
-            // Natural content size; UIScrollView handles scaling.
-            imageView.frame = CGRect(origin: .zero, size: imageSize)
-            scrollView.contentSize = imageSize
         }
 
         private func centerImage() {
             guard let scrollView, let imageView else { return }
-            // Center via contentInset so the image stays centered while zooming.
             let bounds = scrollView.bounds.size
-            let scaledWidth = imageView.frame.size.width * scrollView.zoomScale
-            let scaledHeight = imageView.frame.size.height * scrollView.zoomScale
-            let insetX = max(0, (bounds.width - scaledWidth) / 2)
-            let insetY = max(0, (bounds.height - scaledHeight) / 2)
+            let inset = scrollView.adjustedContentInset
+            let visibleWidth = bounds.width - inset.left - inset.right
+            let visibleHeight = bounds.height - inset.top - inset.bottom
+            let scaledWidth = imageView.bounds.width * scrollView.zoomScale
+            let scaledHeight = imageView.bounds.height * scrollView.zoomScale
+            let insetX = max(0, (visibleWidth - scaledWidth) / 2)
+            let insetY = max(0, (visibleHeight - scaledHeight) / 2)
             scrollView.contentInset = UIEdgeInsets(top: insetY, left: insetX, bottom: insetY, right: insetX)
         }
 
         @objc func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
-            guard let scrollView else { return }
+            guard let scrollView, let imageView else { return }
             if scrollView.zoomScale > scrollView.minimumZoomScale {
                 scrollView.setZoomScale(scrollView.minimumZoomScale, animated: true)
             } else {
-                let newScale = min(scrollView.maximumZoomScale, scrollView.minimumZoomScale * 2)
+                let newScale = min(scrollView.maximumZoomScale, scrollView.minimumZoomScale * 2.0)
                 let point = gesture.location(in: imageView)
                 let size = scrollView.bounds.size
                 let w = size.width / newScale

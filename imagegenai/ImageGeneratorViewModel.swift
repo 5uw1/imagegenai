@@ -12,19 +12,30 @@ final class ImageGeneratorViewModel: ObservableObject {
     private let service: ImageGenerating
     private let store: ImageStore
 
-    init(service: ImageGenerating = OpenAIImageService(),
-         store: ImageStore = .shared) {
-        self.service = service
-        self.store = store
+    init(service: ImageGenerating? = nil,
+         store: ImageStore? = nil) {
+        // Build defaults inside the @MainActor initializer to avoid
+        // evaluating main-actor–isolated defaults in a nonisolated context.
+        self.service = service ?? OpenAIImageService()
+        self.store = store ?? .shared
     }
 
     func loadImages() {
         Task {
-            self.images = await store.getAll()
+            let all = await store.getAll()
+            await MainActor.run {
+                self.images = all
+            }
         }
     }
 
     func generate(size: String = "1024x1024") {
+        // Require API key first
+        guard APIKeyProvider.openAIKey() != nil else {
+            self.errorMessage = "Add your OpenAI API key in Settings first."
+            return
+        }
+
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
@@ -35,16 +46,24 @@ final class ImageGeneratorViewModel: ObservableObject {
             do {
                 let data = try await service.generateImage(for: trimmed, size: size)
                 _ = try await store.saveImage(data: data, prompt: trimmed)
-                self.images = await store.getAll()
-                self.prompt = ""
+                let all = await store.getAll()
+                await MainActor.run {
+                    self.images = all
+                    self.prompt = ""
+                    self.isLoading = false
+                }
             } catch {
+                let message: String
                 if let e = error as? LocalizedError, let msg = e.errorDescription {
-                    self.errorMessage = msg
+                    message = msg
                 } else {
-                    self.errorMessage = error.localizedDescription
+                    message = error.localizedDescription
+                }
+                await MainActor.run {
+                    self.errorMessage = message
+                    self.isLoading = false
                 }
             }
-            self.isLoading = false
         }
     }
 
@@ -56,10 +75,15 @@ final class ImageGeneratorViewModel: ObservableObject {
                 do {
                     try await store.deleteImage(item)
                 } catch {
-                    self.errorMessage = error.localizedDescription
+                    await MainActor.run {
+                        self.errorMessage = error.localizedDescription
+                    }
                 }
             }
-            self.images = await store.getAll()
+            let all = await store.getAll()
+            await MainActor.run {
+                self.images = all
+            }
         }
     }
 }

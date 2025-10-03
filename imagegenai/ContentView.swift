@@ -12,6 +12,8 @@ import Combine
 struct ContentView: View {
     @StateObject private var viewModel = ImageGeneratorViewModel()
     @State private var showingSettings = false
+    @State private var hasAPIKey: Bool = APIKeyProvider.openAIKey() != nil
+    @State private var selectedImage: GeneratedImage?
 
     var body: some View {
         NavigationStack {
@@ -36,9 +38,28 @@ struct ContentView: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(viewModel.isLoading || viewModel.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(
+                        viewModel.isLoading ||
+                        viewModel.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                        !hasAPIKey
+                    )
                 }
                 .padding(.horizontal)
+
+                // Inline prompt when API key is missing
+                if !hasAPIKey {
+                    HStack(spacing: 8) {
+                        Image(systemName: "key.fill")
+                            .foregroundStyle(.yellow)
+                        Text("Add your OpenAI API key in Settings to generate images.")
+                        Button("Open Settings") {
+                            showingSettings = true
+                        }
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+                }
 
                 if viewModel.images.isEmpty {
                     Spacer()
@@ -51,8 +72,8 @@ struct ContentView: View {
                 } else {
                     List {
                         ForEach(viewModel.images) { item in
-                            NavigationLink {
-                                FullImageView(url: item.fileURL)
+                            Button {
+                                selectedImage = item
                             } label: {
                                 HStack(alignment: .top, spacing: 12) {
                                     ThumbnailView(url: item.fileURL)
@@ -72,6 +93,7 @@ struct ContentView: View {
                                 }
                                 .padding(.vertical, 4)
                             }
+                            .buttonStyle(.plain)
                         }
                         .onDelete(perform: viewModel.delete(at:))
                     }
@@ -93,7 +115,16 @@ struct ContentView: View {
                 }
             }
         }
-        .onAppear { viewModel.loadImages() }
+        .onAppear {
+            viewModel.loadImages()
+            hasAPIKey = APIKeyProvider.openAIKey() != nil
+        }
+        .onChange(of: showingSettings) {
+            // Refresh key presence after Settings is dismissed
+            if !showingSettings {
+                hasAPIKey = APIKeyProvider.openAIKey() != nil
+            }
+        }
         .alert("Error", isPresented: Binding(get: {
             viewModel.errorMessage != nil
         }, set: { newValue in
@@ -103,6 +134,11 @@ struct ContentView: View {
         } message: {
             Text(viewModel.errorMessage ?? "")
         }
+        // Full‑screen modal for full image
+        .fullScreenCover(item: $selectedImage) { item in
+            FullImageView(url: item.fileURL)
+        }
+        // Settings modal
         .sheet(isPresented: $showingSettings) {
             NavigationStack {
                 SettingsView()
@@ -140,4 +176,3 @@ private extension DateFormatter {
 #Preview {
     ContentView()
 }
-

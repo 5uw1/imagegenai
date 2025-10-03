@@ -7,9 +7,12 @@ protocol ImageGenerating {
 final class OpenAIImageService: ImageGenerating {
 
     // Provide the key dynamically so changes in Keychain take effect immediately.
-    private let keyProvider: () -> String?
+    // Make this async so we can safely hop to the main actor if needed.
+    private let keyProvider: @Sendable () async -> String?
 
-    init(keyProvider: @escaping () -> String? = APIKeyProvider.openAIKey) {
+    init(keyProvider: @escaping @Sendable () async -> String? = {
+        await MainActor.run { APIKeyProvider.openAIKey() }
+    }) {
         self.keyProvider = keyProvider
     }
 
@@ -37,7 +40,7 @@ final class OpenAIImageService: ImageGenerating {
     }
 
     func generateImage(for prompt: String, size: String = "1024x1024") async throws -> Data {
-        guard let apiKey = keyProvider(), !apiKey.isEmpty else {
+        guard let apiKey = await keyProvider(), !apiKey.isEmpty else {
             throw ServiceError.missingAPIKey
         }
 
@@ -92,4 +95,3 @@ final class OpenAIImageService: ImageGenerating {
         }
     }
 }
-

@@ -10,16 +10,16 @@ actor ImageStore {
     init() {
         self.directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         self.metadataURL = directory.appendingPathComponent("images.json")
-        loadFromDisk()
+        self.items = Self.loadItems(from: metadataURL)
     }
 
-    private func loadFromDisk() {
+    // Static helper so it can be used from the nonisolated initializer.
+    private static func loadItems(from url: URL) -> [GeneratedImage] {
         do {
-            let data = try Data(contentsOf: metadataURL)
-            let decoded = try JSONDecoder().decode([GeneratedImage].self, from: data)
-            self.items = decoded
+            let data = try Data(contentsOf: url)
+            return try JSONDecoder().decode([GeneratedImage].self, from: data)
         } catch {
-            self.items = []
+            return []
         }
     }
 
