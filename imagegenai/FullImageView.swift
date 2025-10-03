@@ -1,12 +1,17 @@
 // FullImageView.swift
 import SwiftUI
 import UIKit
+import Photos
 
 struct FullImageView: View {
     let url: URL
     @State private var uiImage: UIImage?
     @Environment(\.dismiss) private var dismiss
     @State private var controlsVisible = true
+
+    // Save-to-Photos UI state
+    @State private var saveInProgress = false
+    @State private var saveAlertMessage: String?
 
     var body: some View {
         ZStack {
@@ -43,6 +48,26 @@ struct FullImageView: View {
                     Spacer()
 
                     if uiImage != nil {
+                        // Save to Photos
+                        Button {
+                            Task { await saveToPhotos() }
+                        } label: {
+                            Group {
+                                if saveInProgress {
+                                    ProgressView()
+                                        .tint(.white)
+                                } else {
+                                    Image(systemName: "square.and.arrow.down")
+                                }
+                            }
+                            .font(.system(size: 17, weight: .semibold))
+                            .padding(10)
+                            .background(.ultraThinMaterial, in: Circle())
+                        }
+                        .disabled(saveInProgress)
+                        .accessibilityLabel("Save to Photos")
+
+                        // Share
                         ShareLink(item: url) {
                             Image(systemName: "square.and.arrow.up")
                                 .font(.system(size: 17, weight: .semibold))
@@ -65,6 +90,81 @@ struct FullImageView: View {
         }
         .statusBarHidden(!controlsVisible)
         .preferredColorScheme(.dark)
+        .alert("Save Image", isPresented: Binding(get: {
+            saveAlertMessage != nil
+        }, set: { newValue in
+            if !newValue { saveAlertMessage = nil }
+        })) {
+            Button("OK", role: .cancel) { saveAlertMessage = nil }
+        } message: {
+            Text(saveAlertMessage ?? "")
+        }
+    }
+
+    @MainActor
+    private func saveToPhotos() async {
+        guard let image = uiImage else { return }
+        saveInProgress = true
+        defer { saveInProgress = false }
+
+        do {
+            try await PhotosSaver.save(image: image)
+            saveAlertMessage = "Saved to Photos."
+        } catch {
+            if let e = error as? LocalizedError, let msg = e.errorDescription {
+                saveAlertMessage = msg
+            } else {
+                saveAlertMessage = error.localizedDescription
+            }
+        }
+    }
+}
+
+// Helper that requests add-only permission and saves the image as a new asset.
+private enum PhotosSaverError: LocalizedError {
+    case notAuthorized
+    case unknown
+
+    var errorDescription: String? {
+        switch self {
+        case .notAuthorized:
+            return "Permission to add to your Photos library is required."
+        case .unknown:
+            return "Failed to save the image."
+        }
+    }
+}
+
+private struct PhotosSaver {
+    static func save(image: UIImage) async throws {
+        let status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+        switch status {
+        case .authorized, .limited:
+            break
+        case .denied, .restricted:
+            throw PhotosSaverError.notAuthorized
+        case .notDetermined:
+            let newStatus = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard newStatus == .authorized || newStatus == .limited else {
+                throw PhotosSaverError.notAuthorized
+            }
+        @unknown default:
+            throw PhotosSaverError.notAuthorized
+        }
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetCreationRequest.creationRequestForAsset(from: image)
+            }, completionHandler: { success, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                } else if success {
+                    continuation.resume(returning: ())
+                } else {
+                    continuation.resume(throwing: PhotosSaverError.unknown)
+                }
+            })
+        }
     }
 }
 
