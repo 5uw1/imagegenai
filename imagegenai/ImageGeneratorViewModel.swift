@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import Combine
 
 @MainActor
 final class ImageGeneratorViewModel: ObservableObject {
@@ -23,7 +24,7 @@ final class ImageGeneratorViewModel: ObservableObject {
         }
     }
 
-    func generate(size: String = "512x512") {
+    func generate(size: String = "1024x1024") {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
